@@ -7,8 +7,10 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"dario.cat/mergo"
+
 	"go.unistack.org/micro/v3/config"
 	rutil "go.unistack.org/micro/v3/util/reflect"
 )
@@ -50,6 +52,8 @@ func (c *envConfig) Load(ctx context.Context, opts ...config.LoadOption) error {
 
 	options := config.NewLoadOptions(opts...)
 	mopts := []func(*mergo.Config){mergo.WithTypeCheck}
+	tt := timeTransformer{override: options.Override}
+	mopts = append(mopts, mergo.WithTransformers(tt))
 	if options.Override {
 		mopts = append(mopts, mergo.WithOverride)
 	}
@@ -81,7 +85,25 @@ func (c *envConfig) Load(ctx context.Context, opts ...config.LoadOption) error {
 }
 
 func fillValue(ctx context.Context, value reflect.Value, val string) error {
+
 	switch value.Kind() {
+	// Processing of type structures time.Time
+	case reflect.Struct:
+		if value.Type() == reflect.TypeOf(time.Time{}) {
+			layouts := []string{time.RFC3339}
+			var parsed time.Time
+			var err error
+
+			for _, layout := range layouts {
+				parsed, err = time.Parse(layout, val)
+				if err == nil {
+					value.Set(reflect.ValueOf(parsed))
+					return nil
+				}
+			}
+
+			return fmt.Errorf("cannot parse time %q: %w", val, err)
+		}
 	case reflect.Map:
 		t := value.Type()
 		nvals := strings.FieldsFunc(val, func(c rune) bool { return c == ',' || c == ';' })
@@ -143,7 +165,7 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(v))
+		value.Set(reflect.ValueOf(int8(v)))
 	case reflect.Int16:
 		v, err := strconv.ParseInt(val, 10, 16)
 		if err != nil {
@@ -157,6 +179,16 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		}
 		value.Set(reflect.ValueOf(int32(v)))
 	case reflect.Int64:
+		t := value.Type()
+		// Processing of type structures time.Duration
+		if t == reflect.TypeOf(time.Duration(0)) {
+			d, err := time.ParseDuration(val)
+			if err != nil {
+				return err
+			}
+			value.SetInt(int64(d))
+			return nil
+		}
 		v, err := strconv.ParseInt(val, 10, 64)
 		if err != nil {
 			return err
@@ -193,6 +225,7 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		}
 		value.Set(reflect.ValueOf(uint64(v)))
 	}
+
 	return nil
 }
 
@@ -274,6 +307,28 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 		}
 		switch value.Kind() {
 		case reflect.Struct:
+			if value.Type() == reflect.TypeOf(time.Time{}) {
+				tags, ok := field.Tag.Lookup(structTag)
+				if !ok {
+					continue
+				}
+
+				var eval string
+				for _, tag := range strings.Split(tags, ",") {
+					if val, ok := os.LookupEnv(tag); ok {
+						eval = val
+						break
+					}
+				}
+				if eval == "" {
+					continue
+				}
+
+				if err := fillValue(ctx, value, eval); err != nil {
+					return err
+				}
+				continue
+			}
 			value.Set(reflect.Indirect(reflect.New(value.Type())))
 			if err := fillValues(ctx, value, structTag); err != nil {
 				return err
@@ -373,5 +428,57 @@ func NewConfig(opts ...config.Option) config.Config {
 	if len(options.StructTag) == 0 {
 		options.StructTag = DefaultStructTag
 	}
+
 	return &envConfig{opts: options}
+}
+
+type timeTransformer struct {
+	override bool
+}
+
+func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
+	// Processing of type structures time.Time
+	if typ == reflect.TypeOf(time.Time{}) {
+		return func(dst, src reflect.Value) error {
+			if !dst.CanSet() {
+				return nil
+			}
+			srcTime := src.Interface().(time.Time)
+			if srcTime.IsZero() {
+				return nil
+			}
+			dstTime := dst.Interface().(time.Time)
+			if !t.override && !dstTime.IsZero() {
+				return nil
+			}
+			dst.Set(src)
+			return nil
+		}
+	}
+
+	// Processing of type structures *time.Time
+	if typ == reflect.TypeOf((*time.Time)(nil)) {
+		return func(dst, src reflect.Value) error {
+			if !dst.CanSet() {
+				return nil
+			}
+			if src.IsNil() {
+				return nil
+			}
+			srcTime := src.Elem().Interface().(time.Time)
+			if srcTime.IsZero() {
+				return nil
+			}
+			if !t.override && !dst.IsNil() {
+				dstTime := dst.Elem().Interface().(time.Time)
+				if !dstTime.IsZero() {
+					return nil
+				}
+			}
+			dst.Set(src)
+			return nil
+		}
+	}
+
+	return nil
 }
