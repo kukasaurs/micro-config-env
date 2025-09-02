@@ -85,24 +85,15 @@ func (c *envConfig) Load(ctx context.Context, opts ...config.LoadOption) error {
 }
 
 func fillValue(ctx context.Context, value reflect.Value, val string) error {
-
 	switch value.Kind() {
-	// Processing of type structures time.Time
 	case reflect.Struct:
 		if value.Type() == reflect.TypeOf(time.Time{}) {
-			layouts := []string{time.RFC3339}
-			var parsed time.Time
-			var err error
-
-			for _, layout := range layouts {
-				parsed, err = time.Parse(layout, val)
-				if err == nil {
-					value.Set(reflect.ValueOf(parsed))
-					return nil
-				}
+			parsed, err := time.Parse(time.RFC3339, val)
+			if err != nil {
+				return fmt.Errorf("cannot parse time %q: %w", val, err)
 			}
-
-			return fmt.Errorf("cannot parse time %q: %w", val, err)
+			value.Set(reflect.ValueOf(parsed))
+			return nil
 		}
 	case reflect.Map:
 		t := value.Type()
@@ -250,9 +241,10 @@ func (c *envConfig) setValues(ctx context.Context, valueOf reflect.Value) error 
 		if rutil.IsZero(value) {
 			continue
 		}
-		if len(field.PkgPath) != 0 {
+		if !field.IsExported() {
 			continue
 		}
+
 		switch value.Kind() {
 		case reflect.Struct:
 			if err := c.setValues(ctx, value); err != nil {
@@ -298,34 +290,23 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 
 	for idx := 0; idx < fields.NumField(); idx++ {
 		field := fields.Field(idx)
+		if !field.IsExported() {
+			continue
+		}
 		value := values.Field(idx)
 		if !value.CanSet() {
 			continue
 		}
-		if len(field.PkgPath) != 0 {
-			continue
-		}
+
 		switch value.Kind() {
 		case reflect.Struct:
 			if value.Type() == reflect.TypeOf(time.Time{}) {
-				tags, ok := field.Tag.Lookup(structTag)
-				if !ok {
-					continue
-				}
-
-				var eval string
-				for _, tag := range strings.Split(tags, ",") {
-					if val, ok := os.LookupEnv(tag); ok {
-						eval = val
-						break
+				if evals, ok := getEnvByTag(field, structTag); ok {
+					for _, eval := range evals {
+						if err := fillValue(ctx, value, eval); err != nil {
+							return err
+						}
 					}
-				}
-				if eval == "" {
-					continue
-				}
-
-				if err := fillValue(ctx, value, eval); err != nil {
-					return err
 				}
 				continue
 			}
@@ -337,40 +318,24 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 		case reflect.Ptr:
 			if value.IsNil() {
 				if value.Type().Elem().Kind() != reflect.Struct {
-					// nil pointer to a non-struct: leave it alone
-					break
+					break // nil pointer to a non-struct: leave it alone
 				}
-				// nil pointer to struct: create a zero instance
-				value.Set(reflect.New(value.Type().Elem()))
+				value.Set(reflect.New(value.Type().Elem())) // nil pointer to struct: create zero
 			}
-			value = value.Elem()
-			if err := fillValues(ctx, value, structTag); err != nil {
+			if err := fillValues(ctx, value.Elem(), structTag); err != nil {
 				return err
 			}
 			continue
-		}
-		tags, ok := field.Tag.Lookup(structTag)
-		if !ok {
-			continue
-		}
-
-		var eval string
-		for _, tag := range strings.Split(tags, ",") {
-			if val, ok := os.LookupEnv(tag); !ok {
-				continue
-			} else {
-				eval = val
+		default:
+			if evals, ok := getEnvByTag(field, structTag); ok {
+				for _, eval := range evals {
+					if err := fillValue(ctx, value, eval); err != nil {
+						return err
+					}
+				}
 			}
 		}
-		if eval == "" {
-			continue
-		}
-
-		if err := fillValue(ctx, value, eval); err != nil {
-			return err
-		}
 	}
-
 	return nil
 }
 
@@ -437,18 +402,13 @@ type timeTransformer struct {
 }
 
 func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
-	// Processing of type structures time.Time
+	// time.Time
 	if typ == reflect.TypeOf(time.Time{}) {
 		return func(dst, src reflect.Value) error {
-			if !dst.CanSet() {
+			if !dst.CanSet() || src.IsZero() {
 				return nil
 			}
-			srcTime := src.Interface().(time.Time)
-			if srcTime.IsZero() {
-				return nil
-			}
-			dstTime := dst.Interface().(time.Time)
-			if !t.override && !dstTime.IsZero() {
+			if !t.override && !dst.IsZero() {
 				return nil
 			}
 			dst.Set(src)
@@ -456,29 +416,37 @@ func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Val
 		}
 	}
 
-	// Processing of type structures *time.Time
+	// *time.Time  
 	if typ == reflect.TypeOf((*time.Time)(nil)) {
 		return func(dst, src reflect.Value) error {
-			if !dst.CanSet() {
+			if !dst.CanSet() || src.IsNil() {
 				return nil
 			}
-			if src.IsNil() {
+			if src.Elem().IsZero() {
 				return nil
 			}
-			srcTime := src.Elem().Interface().(time.Time)
-			if srcTime.IsZero() {
+			if !t.override && !dst.IsNil() && !dst.Elem().IsZero() {
 				return nil
 			}
-			if !t.override && !dst.IsNil() {
-				dstTime := dst.Elem().Interface().(time.Time)
-				if !dstTime.IsZero() {
-					return nil
-				}
-			}
+
 			dst.Set(src)
 			return nil
 		}
 	}
 
 	return nil
+}
+
+func getEnvByTag(field reflect.StructField, structTag string) ([]string, bool) {
+	tags, ok := field.Tag.Lookup(structTag)
+	if !ok {
+		return nil, false
+	}
+	var vals []string
+	for _, tag := range strings.Split(tags, ",") {
+		if val, ok := os.LookupEnv(tag); ok {
+			vals = append(vals, val)
+		}
+	}
+	return vals, len(vals) > 0
 }

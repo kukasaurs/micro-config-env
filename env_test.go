@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"go.unistack.org/micro/v3/config"
 	rutil "go.unistack.org/micro/v3/util/reflect"
 )
@@ -17,6 +19,234 @@ type Config struct {
 	IntSlice       []int             `env:"INT_SLICE"`
 	MapStringValue map[string]string `env:"MAP_STRING"`
 	MapIntValue    map[string]int    `env:"MAP_INT"`
+}
+
+func TestEnv_SupportedTypes(t *testing.T) {
+	type TestConfig struct {
+		IntValue   int   `env:"INT_VALUE"`
+		Int8Value  int8  `env:"INT8_VALUE"`
+		Int16Value int16 `env:"INT16_VALUE"`
+		Int32Value int32 `env:"INT32_VALUE"`
+		Int64Value int64 `env:"INT64_VALUE"`
+
+		UintValue   uint   `env:"UINT_VALUE"`
+		Uint8Value  uint8  `env:"UINT8_VALUE"`
+		Uint16Value uint16 `env:"UINT16_VALUE"`
+		Uint32Value uint32 `env:"UINT32_VALUE"`
+		Uint64Value uint64 `env:"UINT64_VALUE"`
+
+		Float32Value float32 `env:"FLOAT32_VALUE"`
+		Float64Value float64 `env:"FLOAT64_VALUE"`
+
+		BoolValue bool `env:"BOOL_VALUE"`
+
+		StringValue string `env:"STRING_VALUE"`
+
+		StringSlice []string `env:"STRING_SLICE"`
+		IntSlice    []int    `env:"INT_SLICE"`
+
+		MapStringValue map[string]string `env:"MAP_STRING"`
+		MapIntValue    map[string]int    `env:"MAP_INT"`
+
+		DurationValue time.Duration `env:"DURATION_VALUE"`
+		TimeValue     time.Time     `env:"TIME_VALUE"`
+	}
+
+	tests := []struct {
+		name   string
+		envVar string
+		envVal string
+		want   *TestConfig
+	}{
+		{
+			name:   "int type",
+			envVar: "INT_VALUE",
+			envVal: "100",
+			want:   &TestConfig{IntValue: 100},
+		},
+		{
+			name:   "int8 type",
+			envVar: "INT8_VALUE",
+			envVal: "127",
+			want:   &TestConfig{Int8Value: 127},
+		},
+		{
+			name:   "int16 type",
+			envVar: "INT16_VALUE",
+			envVal: "32767",
+			want:   &TestConfig{Int16Value: 32767},
+		},
+		{
+			name:   "int32 type",
+			envVar: "INT32_VALUE",
+			envVal: "2147483647",
+			want:   &TestConfig{Int32Value: 2147483647},
+		},
+		{
+			name:   "int64 type",
+			envVar: "INT64_VALUE",
+			envVal: "9223372036854775807",
+			want:   &TestConfig{Int64Value: 9223372036854775807},
+		},
+
+		{
+			name:   "uint type",
+			envVar: "UINT_VALUE",
+			envVal: "100",
+			want:   &TestConfig{UintValue: 100},
+		},
+		{
+			name:   "uint8 type",
+			envVar: "UINT8_VALUE",
+			envVal: "255",
+			want:   &TestConfig{Uint8Value: 255},
+		},
+		{
+			name:   "uint16 type",
+			envVar: "UINT16_VALUE",
+			envVal: "65535",
+			want:   &TestConfig{Uint16Value: 65535},
+		},
+		{
+			name:   "uint32 type",
+			envVar: "UINT32_VALUE",
+			envVal: "4294967295",
+			want:   &TestConfig{Uint32Value: 4294967295},
+		},
+		{
+			name:   "uint64 type",
+			envVar: "UINT64_VALUE",
+			envVal: "18446744073709551615",
+			want:   &TestConfig{Uint64Value: 18446744073709551615},
+		},
+
+		{
+			name:   "float32 type",
+			envVar: "FLOAT32_VALUE",
+			envVal: "3.14159",
+			want:   &TestConfig{Float32Value: 3.14159},
+		},
+		{
+			name:   "float64 type",
+			envVar: "FLOAT64_VALUE",
+			envVal: "3.141592653589793",
+			want:   &TestConfig{Float64Value: 3.141592653589793},
+		},
+
+		{
+			name:   "bool true",
+			envVar: "BOOL_VALUE",
+			envVal: "true",
+			want:   &TestConfig{BoolValue: true},
+		},
+		{
+			name:   "bool false",
+			envVar: "BOOL_VALUE",
+			envVal: "false",
+			want:   &TestConfig{BoolValue: false},
+		},
+		{
+			name:   "bool 1",
+			envVar: "BOOL_VALUE",
+			envVal: "1",
+			want:   &TestConfig{BoolValue: true},
+		},
+		{
+			name:   "bool 0",
+			envVar: "BOOL_VALUE",
+			envVal: "0",
+			want:   &TestConfig{BoolValue: false},
+		},
+
+		{
+			name:   "string type",
+			envVar: "STRING_VALUE",
+			envVal: "hello world",
+			want:   &TestConfig{StringValue: "hello world"},
+		},
+
+		{
+			name:   "string slice comma separated",
+			envVar: "STRING_SLICE",
+			envVal: "val1,val2,val3",
+			want:   &TestConfig{StringSlice: []string{"val1", "val2", "val3"}},
+		},
+		{
+			name:   "string slice semicolon separated",
+			envVar: "STRING_SLICE",
+			envVal: "val1;val2;val3",
+			want:   &TestConfig{StringSlice: []string{"val1", "val2", "val3"}},
+		},
+		{
+			name:   "int slice",
+			envVar: "INT_SLICE",
+			envVal: "1,2,3,4,5",
+			want:   &TestConfig{IntSlice: []int{1, 2, 3, 4, 5}},
+		},
+
+		{
+			name:   "string map",
+			envVar: "MAP_STRING",
+			envVal: "key1=val1,key2=val2",
+			want:   &TestConfig{MapStringValue: map[string]string{"key1": "val1", "key2": "val2"}},
+		},
+		{
+			name:   "int map",
+			envVar: "MAP_INT",
+			envVal: "key1=1,key2=2",
+			want:   &TestConfig{MapIntValue: map[string]int{"key1": 1, "key2": 2}},
+		},
+
+		{
+			name:   "duration type",
+			envVar: "DURATION_VALUE",
+			envVal: "15m30s",
+			want:   &TestConfig{DurationValue: 15*time.Minute + 30*time.Second},
+		},
+		{
+			name:   "time type RFC3339",
+			envVar: "TIME_VALUE",
+			envVal: "2025-08-28T15:04:05Z",
+			want:   &TestConfig{TimeValue: time.Date(2025, 8, 28, 15, 4, 5, 0, time.UTC)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, os.Setenv(tt.envVar, tt.envVal))
+			defer os.Unsetenv(tt.envVar)
+
+			cfgData := &TestConfig{}
+			cfg := NewConfig(config.Struct(cfgData))
+
+			require.NoError(t, cfg.Init())
+			require.NoError(t, cfg.Load(context.Background()))
+
+			require.Equal(t, tt.want.IntValue, cfgData.IntValue)
+			require.Equal(t, tt.want.Int8Value, cfgData.Int8Value)
+			require.Equal(t, tt.want.Int16Value, cfgData.Int16Value)
+			require.Equal(t, tt.want.Int32Value, cfgData.Int32Value)
+			require.Equal(t, tt.want.Int64Value, cfgData.Int64Value)
+			require.Equal(t, tt.want.UintValue, cfgData.UintValue)
+			require.Equal(t, tt.want.Uint8Value, cfgData.Uint8Value)
+			require.Equal(t, tt.want.Uint16Value, cfgData.Uint16Value)
+			require.Equal(t, tt.want.Uint32Value, cfgData.Uint32Value)
+			require.Equal(t, tt.want.Uint64Value, cfgData.Uint64Value)
+			require.Equal(t, tt.want.Float32Value, cfgData.Float32Value)
+			require.Equal(t, tt.want.Float64Value, cfgData.Float64Value)
+			require.Equal(t, tt.want.BoolValue, cfgData.BoolValue)
+			require.Equal(t, tt.want.StringValue, cfgData.StringValue)
+			require.Equal(t, tt.want.StringSlice, cfgData.StringSlice)
+			require.Equal(t, tt.want.IntSlice, cfgData.IntSlice)
+			require.Equal(t, tt.want.MapStringValue, cfgData.MapStringValue)
+			require.Equal(t, tt.want.MapIntValue, cfgData.MapIntValue)
+			require.Equal(t, tt.want.DurationValue, cfgData.DurationValue)
+
+			if !tt.want.TimeValue.IsZero() {
+				require.True(t, tt.want.TimeValue.Equal(cfgData.TimeValue))
+			}
+		})
+	}
 }
 
 func TestMerge(t *testing.T) {
@@ -236,5 +466,38 @@ func TestLoadMultiple(t *testing.T) {
 		if err := os.Unsetenv(v); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestEnv_ErrorHandling(t *testing.T) {
+	type TestConfig struct {
+		IntValue int `env:"INT_VALUE"`
+	}
+
+	tests := []struct {
+		name   string
+		envVar string
+		envVal string
+	}{
+		{
+			name:   "invalid int value",
+			envVar: "INT_VALUE",
+			envVal: "not_a_number",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, os.Setenv(tt.envVar, tt.envVal))
+			defer os.Unsetenv(tt.envVar)
+
+			cfgData := &TestConfig{}
+			cfg := NewConfig(config.Struct(cfgData))
+
+			require.NoError(t, cfg.Init())
+
+			err := cfg.Load(context.Background())
+			require.Error(t, err)
+		})
 	}
 }
