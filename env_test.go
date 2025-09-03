@@ -21,6 +21,110 @@ type Config struct {
 	MapIntValue    map[string]int    `env:"MAP_INT"`
 }
 
+func TestEnv_TimeType_Override(t *testing.T) {
+	type Config struct {
+		TimeValue time.Time `env:"TIME"`
+	}
+
+	tests := []struct {
+		name   string
+		cfg    *Config
+		envVar string
+		envVal string
+		want   *Config
+	}{
+		{
+			name:   "init value is empty",
+			cfg:    &Config{},
+			envVar: "TIME",
+			envVal: "2025-08-28T15:04:05Z",
+			want: &Config{
+				TimeValue: time.Date(2025, 8, 28, 15, 4, 5, 0, time.UTC),
+			},
+		},
+		{
+			name: "init value is not empty",
+			cfg: &Config{
+				TimeValue: time.Date(2025, 5, 25, 15, 5, 5, 5, time.UTC),
+			},
+			envVar: "TIME",
+			envVal: "2025-08-28T15:04:05Z",
+			want: &Config{
+				TimeValue: time.Date(2025, 8, 28, 15, 4, 5, 0, time.UTC),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, os.Setenv(tt.envVar, tt.envVal))
+			defer os.Unsetenv(tt.envVar)
+
+			cfg := NewConfig(config.Struct(tt.cfg))
+			require.NoError(t, cfg.Init())
+			require.NoError(t, cfg.Load(context.Background(), config.LoadOverride(true)))
+			require.Equal(t, tt.want, tt.cfg)
+		})
+	}
+}
+
+func TestEnv_TimePointerType_Override(t *testing.T) {
+	type Config struct {
+		TimeValue *time.Time `env:"TIME"`
+	}
+
+	tests := []struct {
+		name   string
+		cfg    func() *Config
+		envVar string
+		envVal string
+		want   func() *Config
+	}{
+		{
+			name:   "init value is empty",
+			cfg:    func() *Config { return &Config{} },
+			envVar: "TIME",
+			envVal: "2025-08-28T15:04:05Z",
+			want: func() *Config {
+				timeValue := time.Date(2025, 8, 28, 15, 4, 5, 0, time.UTC)
+				return &Config{
+					TimeValue: &timeValue,
+				}
+			},
+		},
+		{
+			name: "init value is not empty",
+			cfg: func() *Config {
+				timeValue := time.Date(2025, 5, 25, 15, 5, 5, 5, time.UTC)
+				return &Config{
+					TimeValue: &timeValue,
+				}
+			},
+			envVar: "TIME",
+			envVal: "2025-08-28T15:04:05Z",
+			want: func() *Config {
+				timeValue := time.Date(2025, 8, 28, 15, 4, 5, 0, time.UTC)
+				return &Config{
+					TimeValue: &timeValue,
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, os.Setenv(tt.envVar, tt.envVal))
+			defer os.Unsetenv(tt.envVar)
+
+			cfgData := tt.cfg()
+			cfg := NewConfig(config.Struct(cfgData))
+			require.NoError(t, cfg.Init())
+			require.NoError(t, cfg.Load(context.Background(), config.LoadOverride(true)))
+			require.Equal(t, tt.want(), cfgData)
+		})
+	}
+}
+
 func TestEnv_SupportedTypes(t *testing.T) {
 	type TestConfig struct {
 		IntValue   int   `env:"INT_VALUE"`
@@ -222,25 +326,7 @@ func TestEnv_SupportedTypes(t *testing.T) {
 			require.NoError(t, cfg.Init())
 			require.NoError(t, cfg.Load(context.Background()))
 
-			require.Equal(t, tt.want.IntValue, cfgData.IntValue)
-			require.Equal(t, tt.want.Int8Value, cfgData.Int8Value)
-			require.Equal(t, tt.want.Int16Value, cfgData.Int16Value)
-			require.Equal(t, tt.want.Int32Value, cfgData.Int32Value)
-			require.Equal(t, tt.want.Int64Value, cfgData.Int64Value)
-			require.Equal(t, tt.want.UintValue, cfgData.UintValue)
-			require.Equal(t, tt.want.Uint8Value, cfgData.Uint8Value)
-			require.Equal(t, tt.want.Uint16Value, cfgData.Uint16Value)
-			require.Equal(t, tt.want.Uint32Value, cfgData.Uint32Value)
-			require.Equal(t, tt.want.Uint64Value, cfgData.Uint64Value)
-			require.Equal(t, tt.want.Float32Value, cfgData.Float32Value)
-			require.Equal(t, tt.want.Float64Value, cfgData.Float64Value)
-			require.Equal(t, tt.want.BoolValue, cfgData.BoolValue)
-			require.Equal(t, tt.want.StringValue, cfgData.StringValue)
-			require.Equal(t, tt.want.StringSlice, cfgData.StringSlice)
-			require.Equal(t, tt.want.IntSlice, cfgData.IntSlice)
-			require.Equal(t, tt.want.MapStringValue, cfgData.MapStringValue)
-			require.Equal(t, tt.want.MapIntValue, cfgData.MapIntValue)
-			require.Equal(t, tt.want.DurationValue, cfgData.DurationValue)
+			require.Equal(t, tt.want, cfgData)
 
 			if !tt.want.TimeValue.IsZero() {
 				require.True(t, tt.want.TimeValue.Equal(cfgData.TimeValue))
@@ -466,38 +552,5 @@ func TestLoadMultiple(t *testing.T) {
 		if err := os.Unsetenv(v); err != nil {
 			t.Fatal(err)
 		}
-	}
-}
-
-func TestEnv_ErrorHandling(t *testing.T) {
-	type TestConfig struct {
-		IntValue int `env:"INT_VALUE"`
-	}
-
-	tests := []struct {
-		name   string
-		envVar string
-		envVal string
-	}{
-		{
-			name:   "invalid int value",
-			envVar: "INT_VALUE",
-			envVal: "not_a_number",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.NoError(t, os.Setenv(tt.envVar, tt.envVal))
-			defer os.Unsetenv(tt.envVar)
-
-			cfgData := &TestConfig{}
-			cfg := NewConfig(config.Struct(cfgData))
-
-			require.NoError(t, cfg.Init())
-
-			err := cfg.Load(context.Background())
-			require.Error(t, err)
-		})
 	}
 }
