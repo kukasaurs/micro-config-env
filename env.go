@@ -337,9 +337,9 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 			if value.IsNil() {
 				if value.Type().Elem().Kind() != reflect.Struct {
 					// nil pointer to a non-struct: leave it alone
-					break 
+					break
 				}
-				// nil pointer to struct: create zero
+				// nil pointer to struct: create a zero instance
 				value.Set(reflect.New(value.Type().Elem()))
 			}
 			if err := fillValues(ctx, value.Elem(), structTag); err != nil {
