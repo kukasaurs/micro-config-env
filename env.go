@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"dario.cat/mergo"
 	"go.unistack.org/micro/v3/config"
@@ -50,6 +51,8 @@ func (c *envConfig) Load(ctx context.Context, opts ...config.LoadOption) error {
 
 	options := config.NewLoadOptions(opts...)
 	mopts := []func(*mergo.Config){mergo.WithTypeCheck}
+	tt := timeTransformer{override: options.Override}
+	mopts = append(mopts, mergo.WithTransformers(tt))
 	if options.Override {
 		mopts = append(mopts, mergo.WithOverride)
 	}
@@ -143,7 +146,7 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(v))
+		value.Set(reflect.ValueOf(int8(v)))
 	case reflect.Int16:
 		v, err := strconv.ParseInt(val, 10, 16)
 		if err != nil {
@@ -157,6 +160,14 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		}
 		value.Set(reflect.ValueOf(int32(v)))
 	case reflect.Int64:
+		if value.Type() == reflect.TypeOf(time.Duration(0)) {
+			d, err := time.ParseDuration(val)
+			if err != nil {
+				return fmt.Errorf("cannot parse duration %q: %w", val, err)
+			}
+			value.SetInt(int64(d))
+			return nil
+		}
 		v, err := strconv.ParseInt(val, 10, 64)
 		if err != nil {
 			return err
@@ -217,7 +228,7 @@ func (c *envConfig) setValues(ctx context.Context, valueOf reflect.Value) error 
 		if rutil.IsZero(value) {
 			continue
 		}
-		if len(field.PkgPath) != 0 {
+		if !field.IsExported() {
 			continue
 		}
 		switch value.Kind() {
@@ -248,6 +259,20 @@ func (c *envConfig) setValues(ctx context.Context, valueOf reflect.Value) error 
 	return nil
 }
 
+func getEnvValue(field reflect.StructField, structTag string) (string, bool) {
+	tags, ok := field.Tag.Lookup(structTag)
+	if !ok {
+		return "", false
+	}
+	var val string
+	for _, tag := range strings.Split(tags, ",") {
+		if v, ok := os.LookupEnv(tag); ok {
+			val = v
+		}
+	}
+	return val, val != ""
+}
+
 func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) error {
 	var values reflect.Value
 
@@ -265,21 +290,42 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 
 	for idx := 0; idx < fields.NumField(); idx++ {
 		field := fields.Field(idx)
+		if !field.IsExported() {
+			continue
+		}
 		value := values.Field(idx)
 		if !value.CanSet() {
 			continue
 		}
-		if len(field.PkgPath) != 0 {
-			continue
-		}
+
 		switch value.Kind() {
 		case reflect.Struct:
+			if value.Type() == reflect.TypeOf(time.Time{}) {
+				if eval, ok := getEnvValue(field, structTag); ok {
+					parsed, err := time.Parse(time.RFC3339, eval)
+					if err != nil {
+						return fmt.Errorf("cannot parse time.Time %q: %w", eval, err)
+					}
+					value.Set(reflect.ValueOf(parsed))
+				}
+				continue
+			}
 			value.Set(reflect.Indirect(reflect.New(value.Type())))
 			if err := fillValues(ctx, value, structTag); err != nil {
 				return err
 			}
 			continue
 		case reflect.Ptr:
+			if value.Type().Elem() == reflect.TypeOf(time.Time{}) {
+				if eval, ok := getEnvValue(field, structTag); ok {
+					parsed, err := time.Parse(time.RFC3339, eval)
+					if err != nil {
+						return fmt.Errorf("cannot parse *time.Time %q: %w", eval, err)
+					}
+					value.Set(reflect.ValueOf(&parsed))
+				}
+				continue
+			}
 			if value.IsNil() {
 				if value.Type().Elem().Kind() != reflect.Struct {
 					// nil pointer to a non-struct: leave it alone
@@ -288,34 +334,18 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 				// nil pointer to struct: create a zero instance
 				value.Set(reflect.New(value.Type().Elem()))
 			}
-			value = value.Elem()
-			if err := fillValues(ctx, value, structTag); err != nil {
+			if err := fillValues(ctx, value.Elem(), structTag); err != nil {
 				return err
 			}
 			continue
-		}
-		tags, ok := field.Tag.Lookup(structTag)
-		if !ok {
-			continue
-		}
-
-		var eval string
-		for _, tag := range strings.Split(tags, ",") {
-			if val, ok := os.LookupEnv(tag); !ok {
-				continue
-			} else {
-				eval = val
+		default:
+			if eval, ok := getEnvValue(field, structTag); ok {
+				if err := fillValue(ctx, value, eval); err != nil {
+					return err
+				}
 			}
 		}
-		if eval == "" {
-			continue
-		}
-
-		if err := fillValue(ctx, value, eval); err != nil {
-			return err
-		}
 	}
-
 	return nil
 }
 
@@ -374,4 +404,39 @@ func NewConfig(opts ...config.Option) config.Config {
 		options.StructTag = DefaultStructTag
 	}
 	return &envConfig{opts: options}
+}
+
+type timeTransformer struct {
+	override bool
+}
+
+func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
+	if typ == reflect.TypeOf(time.Time{}) {
+		return func(dst, src reflect.Value) error {
+			if !dst.CanSet() || src.IsZero() {
+				return nil
+			}
+			if !t.override && !dst.IsZero() {
+				return nil
+			}
+			dst.Set(src)
+			return nil
+		}
+	}
+	if typ == reflect.TypeOf((*time.Time)(nil)) {
+		return func(dst, src reflect.Value) error {
+			if !dst.CanSet() || src.IsNil() {
+				return nil
+			}
+			if src.Elem().IsZero() {
+				return nil
+			}
+			if !t.override && !dst.IsNil() && !dst.Elem().IsZero() {
+				return nil
+			}
+			dst.Set(src)
+			return nil
+		}
+	}
+	return nil
 }
