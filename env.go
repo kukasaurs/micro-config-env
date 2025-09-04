@@ -85,15 +85,6 @@ func (c *envConfig) Load(ctx context.Context, opts ...config.LoadOption) error {
 
 func fillValue(ctx context.Context, value reflect.Value, val string) error {
 	switch value.Kind() {
-	case reflect.Struct:
-		if value.Type() == reflect.TypeOf(time.Time{}) {
-			parsed, err := time.Parse(time.RFC3339, val)
-			if err != nil {
-				return fmt.Errorf("cannot parse time %q: %w", val, err)
-			}
-			value.Set(reflect.ValueOf(parsed))
-			return nil
-		}
 	case reflect.Map:
 		t := value.Type()
 		nvals := strings.FieldsFunc(val, func(c rune) bool { return c == ',' || c == ';' })
@@ -169,8 +160,7 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		}
 		value.Set(reflect.ValueOf(int32(v)))
 	case reflect.Int64:
-		t := value.Type()
-		if t == reflect.TypeOf(time.Duration(0)) {
+		if value.Type() == reflect.TypeOf(time.Duration(0)) {
 			d, err := time.ParseDuration(val)
 			if err != nil {
 				return fmt.Errorf("cannot parse duration %q: %w", val, err)
@@ -280,7 +270,7 @@ func getEnvValue(field reflect.StructField, structTag string) (string, bool) {
 			val = v
 		}
 	}
-	return val, len(val) > 0
+	return val, val != ""
 }
 
 func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) error {
@@ -312,9 +302,11 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 		case reflect.Struct:
 			if value.Type() == reflect.TypeOf(time.Time{}) {
 				if eval, ok := getEnvValue(field, structTag); ok {
-					if err := fillValue(ctx, value, eval); err != nil {
-						return err
+					parsed, err := time.Parse(time.RFC3339, eval)
+					if err != nil {
+						return fmt.Errorf("cannot parse time.Time %q: %w", eval, err)
 					}
+					value.Set(reflect.ValueOf(parsed))
 				}
 				continue
 			}
