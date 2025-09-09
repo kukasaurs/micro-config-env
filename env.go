@@ -120,47 +120,47 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(v))
+		value.SetBool(v)
 	case reflect.String:
-		value.Set(reflect.ValueOf(val))
+		value.SetString(val)
 	case reflect.Float32:
 		v, err := strconv.ParseFloat(val, 32)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(float32(v)))
+		value.SetFloat(v)
 	case reflect.Float64:
 		v, err := strconv.ParseFloat(val, 64)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(float64(v)))
+		value.SetFloat(v)
 	case reflect.Int:
 		v, err := strconv.ParseInt(val, 10, 0)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(int(v)))
+		value.SetInt(v)
 	case reflect.Int8:
 		v, err := strconv.ParseInt(val, 10, 8)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(int8(v)))
+		value.SetInt(v)
 	case reflect.Int16:
 		v, err := strconv.ParseInt(val, 10, 16)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(int16(v)))
+		value.SetInt(v)
 	case reflect.Int32:
 		v, err := strconv.ParseInt(val, 10, 32)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(int32(v)))
+		value.SetInt(v)
 	case reflect.Int64:
-		if value.Type() == reflect.TypeOf(time.Duration(0)) {
+		if value.Type() == reflect.TypeFor[time.Duration]() {
 			d, err := time.ParseDuration(val)
 			if err != nil {
 				return fmt.Errorf("cannot parse duration %q: %w", val, err)
@@ -172,37 +172,37 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(int64(v)))
+		value.SetInt(v)
 	case reflect.Uint:
 		v, err := strconv.ParseUint(val, 10, 0)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(uint(v)))
+		value.SetUint(v)
 	case reflect.Uint8:
 		v, err := strconv.ParseUint(val, 10, 8)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(uint8(v)))
+		value.SetUint(v)
 	case reflect.Uint16:
 		v, err := strconv.ParseUint(val, 10, 16)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(uint16(v)))
+		value.SetUint(v)
 	case reflect.Uint32:
 		v, err := strconv.ParseUint(val, 10, 32)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(uint32(v)))
+		value.SetUint(v)
 	case reflect.Uint64:
 		v, err := strconv.ParseUint(val, 10, 64)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(uint64(v)))
+		value.SetUint(v)
 	}
 	return nil
 }
@@ -300,7 +300,7 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 
 		switch value.Kind() {
 		case reflect.Struct:
-			if value.Type() == reflect.TypeOf(time.Time{}) {
+			if value.Type() == reflect.TypeFor[time.Time]() {
 				if eval, ok := getEnvValue(field, structTag); ok {
 					parsed, err := time.Parse(time.RFC3339, eval)
 					if err != nil {
@@ -316,7 +316,7 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 			}
 			continue
 		case reflect.Ptr:
-			if value.Type().Elem() == reflect.TypeOf(time.Time{}) {
+			if value.Type().Elem() == reflect.TypeFor[time.Time]() {
 				if eval, ok := getEnvValue(field, structTag); ok {
 					parsed, err := time.Parse(time.RFC3339, eval)
 					if err != nil {
@@ -411,7 +411,7 @@ type timeTransformer struct {
 }
 
 func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
-	if typ == reflect.TypeOf(time.Time{}) {
+	if typ == reflect.TypeFor[time.Time]() {
 		return func(dst, src reflect.Value) error {
 			if !dst.CanSet() || src.IsZero() {
 				return nil
@@ -423,7 +423,7 @@ func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Val
 			return nil
 		}
 	}
-	if typ == reflect.TypeOf((*time.Time)(nil)) {
+	if typ == reflect.TypeFor[*time.Time]() {
 		return func(dst, src reflect.Value) error {
 			if !dst.CanSet() || src.IsNil() {
 				return nil
@@ -438,5 +438,6 @@ func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Val
 			return nil
 		}
 	}
+
 	return nil
 }
