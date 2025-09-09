@@ -83,6 +83,18 @@ func (c *envConfig) Load(ctx context.Context, opts ...config.LoadOption) error {
 	return nil
 }
 
+func isDurationType(t reflect.Type) bool {
+	return t == reflect.TypeFor[time.Duration]()
+}
+
+func isTimeType(t reflect.Type) bool {
+	return t == reflect.TypeFor[time.Time]()
+}
+
+func isTimePtrType(t reflect.Type) bool {
+	return t.Kind() == reflect.Ptr && isTimeType(t.Elem())
+}
+
 func fillValue(ctx context.Context, value reflect.Value, val string) error {
 	switch value.Kind() {
 	case reflect.Map:
@@ -94,9 +106,12 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		kt := t.Key()
 		et := t.Elem()
 		for _, nval := range nvals {
-			kv := strings.FieldsFunc(nval, func(c rune) bool { return c == '=' })
-			mkey := reflect.Indirect(reflect.New(kt))
-			mval := reflect.Indirect(reflect.New(et))
+			kv := strings.SplitN(nval, "=", 2)
+			if len(kv) != 2 {
+				return fmt.Errorf("invalid map entry %q", nval)
+			}
+			mkey := reflect.New(kt).Elem()
+			mval := reflect.New(et).Elem()
 			if err := fillValue(ctx, mkey, kv[0]); err != nil {
 				return err
 			}
@@ -105,11 +120,25 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 			}
 			value.SetMapIndex(mkey, mval)
 		}
-	case reflect.Slice, reflect.Array:
+	case reflect.Slice:
+		t := value.Type()
 		nvals := strings.FieldsFunc(val, func(c rune) bool { return c == ',' || c == ';' })
-		value.Set(reflect.MakeSlice(reflect.SliceOf(value.Type().Elem()), len(nvals), len(nvals)))
+		value.Set(reflect.MakeSlice(t, len(nvals), len(nvals)))
 		for idx, nval := range nvals {
-			nvalue := reflect.Indirect(reflect.New(value.Type().Elem()))
+			nvalue := reflect.New(t.Elem()).Elem()
+			if err := fillValue(ctx, nvalue, nval); err != nil {
+				return err
+			}
+			value.Index(idx).Set(nvalue)
+		}
+	case reflect.Array:
+		t := value.Type()
+		nvals := strings.FieldsFunc(val, func(c rune) bool { return c == ',' || c == ';' })
+		if len(nvals) != t.Len() {
+			return fmt.Errorf("array length mismatch: got %d, want %d", len(nvals), t.Len())
+		}
+		for idx, nval := range nvals {
+			nvalue := reflect.New(t.Elem()).Elem()
 			if err := fillValue(ctx, nvalue, nval); err != nil {
 				return err
 			}
@@ -135,32 +164,8 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 			return err
 		}
 		value.SetFloat(v)
-	case reflect.Int:
-		v, err := strconv.ParseInt(val, 10, 0)
-		if err != nil {
-			return err
-		}
-		value.SetInt(v)
-	case reflect.Int8:
-		v, err := strconv.ParseInt(val, 10, 8)
-		if err != nil {
-			return err
-		}
-		value.SetInt(v)
-	case reflect.Int16:
-		v, err := strconv.ParseInt(val, 10, 16)
-		if err != nil {
-			return err
-		}
-		value.SetInt(v)
-	case reflect.Int32:
-		v, err := strconv.ParseInt(val, 10, 32)
-		if err != nil {
-			return err
-		}
-		value.SetInt(v)
-	case reflect.Int64:
-		if value.Type() == reflect.TypeFor[time.Duration]() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if isDurationType(value.Type()) {
 			d, err := time.ParseDuration(val)
 			if err != nil {
 				return fmt.Errorf("cannot parse duration %q: %w", val, err)
@@ -168,37 +173,15 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 			value.SetInt(int64(d))
 			return nil
 		}
-		v, err := strconv.ParseInt(val, 10, 64)
+		bitSize := value.Type().Bits()
+		v, err := strconv.ParseInt(val, 10, bitSize)
 		if err != nil {
 			return err
 		}
 		value.SetInt(v)
-	case reflect.Uint:
-		v, err := strconv.ParseUint(val, 10, 0)
-		if err != nil {
-			return err
-		}
-		value.SetUint(v)
-	case reflect.Uint8:
-		v, err := strconv.ParseUint(val, 10, 8)
-		if err != nil {
-			return err
-		}
-		value.SetUint(v)
-	case reflect.Uint16:
-		v, err := strconv.ParseUint(val, 10, 16)
-		if err != nil {
-			return err
-		}
-		value.SetUint(v)
-	case reflect.Uint32:
-		v, err := strconv.ParseUint(val, 10, 32)
-		if err != nil {
-			return err
-		}
-		value.SetUint(v)
-	case reflect.Uint64:
-		v, err := strconv.ParseUint(val, 10, 64)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		bitSize := value.Type().Bits()
+		v, err := strconv.ParseUint(val, 10, bitSize)
 		if err != nil {
 			return err
 		}
@@ -300,7 +283,7 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 
 		switch value.Kind() {
 		case reflect.Struct:
-			if value.Type() == reflect.TypeFor[time.Time]() {
+			if isTimeType(value.Type()) {
 				if eval, ok := getEnvValue(field, structTag); ok {
 					parsed, err := time.Parse(time.RFC3339, eval)
 					if err != nil {
@@ -310,13 +293,12 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 				}
 				continue
 			}
-			value.Set(reflect.Indirect(reflect.New(value.Type())))
 			if err := fillValues(ctx, value, structTag); err != nil {
 				return err
 			}
 			continue
 		case reflect.Ptr:
-			if value.Type().Elem() == reflect.TypeFor[time.Time]() {
+			if isTimeType(value.Type().Elem()) {
 				if eval, ok := getEnvValue(field, structTag); ok {
 					parsed, err := time.Parse(time.RFC3339, eval)
 					if err != nil {
@@ -411,7 +393,7 @@ type timeTransformer struct {
 }
 
 func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
-	if typ == reflect.TypeFor[time.Time]() {
+	if isTimeType(typ) {
 		return func(dst, src reflect.Value) error {
 			if !dst.CanSet() || src.IsZero() {
 				return nil
@@ -423,7 +405,7 @@ func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Val
 			return nil
 		}
 	}
-	if typ == reflect.TypeFor[*time.Time]() {
+	if isTimePtrType(typ) {
 		return func(dst, src reflect.Value) error {
 			if !dst.CanSet() || src.IsNil() {
 				return nil
