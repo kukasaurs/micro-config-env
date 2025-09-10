@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"dario.cat/mergo"
+
 	"go.unistack.org/micro/v3/config"
 	rutil "go.unistack.org/micro/v3/util/reflect"
 )
@@ -81,18 +82,6 @@ func (c *envConfig) Load(ctx context.Context, opts ...config.LoadOption) error {
 	}
 
 	return nil
-}
-
-func isDurationType(t reflect.Type) bool {
-	return t == reflect.TypeFor[time.Duration]()
-}
-
-func isTimeType(t reflect.Type) bool {
-	return t == reflect.TypeFor[time.Time]()
-}
-
-func isTimePtrType(t reflect.Type) bool {
-	return t.Kind() == reflect.Ptr && isTimeType(t.Elem())
 }
 
 func fillValue(ctx context.Context, value reflect.Value, val string) error {
