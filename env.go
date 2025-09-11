@@ -52,7 +52,7 @@ func (c *envConfig) Load(ctx context.Context, opts ...config.LoadOption) error {
 
 	options := config.NewLoadOptions(opts...)
 	mopts := []func(*mergo.Config){mergo.WithTypeCheck}
-	tt := timeTransformer{override: options.Override}
+	tt := typeTransformer{override: options.Override}
 	mopts = append(mopts, mergo.WithTransformers(tt))
 	if options.Override {
 		mopts = append(mopts, mergo.WithOverride)
@@ -221,8 +221,25 @@ func (c *envConfig) setValues(ctx context.Context, valueOf reflect.Value) error 
 		if !ok {
 			continue
 		}
+		var strVal string
+		switch value.Kind() {
+		case reflect.Slice, reflect.Array:
+			parts := make([]string, value.Len())
+			for i := 0; i < value.Len(); i++ {
+				parts[i] = fmt.Sprintf("%v", value.Index(i).Interface())
+			}
+			strVal = strings.Join(parts, ",")
+		case reflect.Map:
+			parts := make([]string, 0, value.Len())
+			for _, key := range value.MapKeys() {
+				parts = append(parts, fmt.Sprintf("%v=%v", key.Interface(), value.MapIndex(key).Interface()))
+			}
+			strVal = strings.Join(parts, ",")
+		default:
+			strVal = fmt.Sprintf("%v", value.Interface())
+		}
 		for _, tag := range strings.Split(tags, ",") {
-			if err := os.Setenv(tag, fmt.Sprintf("%v", value.Interface())); err != nil && !c.opts.AllowFail {
+			if err := os.Setenv(tag, strVal); err != nil && !c.opts.AllowFail {
 				return err
 			}
 		}
@@ -377,11 +394,11 @@ func NewConfig(opts ...config.Option) config.Config {
 	return &envConfig{opts: options}
 }
 
-type timeTransformer struct {
+type typeTransformer struct {
 	override bool
 }
 
-func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
+func (t typeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
 	if isTimeType(typ) {
 		return func(dst, src reflect.Value) error {
 			if !dst.CanSet() || src.IsZero() {
@@ -403,6 +420,18 @@ func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Val
 				return nil
 			}
 			if !t.override && !dst.IsNil() && !dst.Elem().IsZero() {
+				return nil
+			}
+			dst.Set(src)
+			return nil
+		}
+	}
+	if typ.Kind() == reflect.Array {
+		return func(dst, src reflect.Value) error {
+			if !dst.CanSet() || src.IsZero() {
+				return nil
+			}
+			if !t.override && !isZeroArray(dst) {
 				return nil
 			}
 			dst.Set(src)
