@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
 	"go.unistack.org/micro/v3/config"
 	rutil "go.unistack.org/micro/v3/util/reflect"
 )
@@ -60,7 +61,7 @@ func TestMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	os.Setenv("NAME_VALUE", "after")
+	require.NoError(t, os.Setenv("NAME_VALUE", "after"))
 	changes, err := w.Next()
 	if err != nil {
 		t.Fatal(err)
@@ -102,12 +103,12 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("something wrong with env config: %#+v", conf)
 	}
 
-	os.Setenv("STRING_VALUE", "STRING_VALUE")
-	os.Setenv("BOOL_VALUE", "true")
-	os.Setenv("STRING_SLICE", "STRING_SLICE1,STRING_SLICE2;STRING_SLICE3")
-	os.Setenv("INT_SLICE", "1,2,3,4,5")
-	os.Setenv("MAP_STRING", "key1=val1,key2=val2")
-	os.Setenv("MAP_INT", "key1=1,key2=2")
+	require.NoError(t, os.Setenv("STRING_VALUE", "STRING_VALUE"))
+	require.NoError(t, os.Setenv("BOOL_VALUE", "true"))
+	require.NoError(t, os.Setenv("STRING_SLICE", "STRING_SLICE1,STRING_SLICE2;STRING_SLICE3"))
+	require.NoError(t, os.Setenv("INT_SLICE", "1,2,3,4,5"))
+	require.NoError(t, os.Setenv("MAP_STRING", "key1=val1,key2=val2"))
+	require.NoError(t, os.Setenv("MAP_INT", "key1=1,key2=2"))
 
 	if err := cfg.Load(ctx, config.LoadOverride(true), config.LoadAppend(true)); err != nil {
 		t.Fatal(err)
@@ -216,8 +217,8 @@ func TestLoadMultiple(t *testing.T) {
 		t.Fatalf("something wrong with env config: %#+v", conf)
 	}
 
-	os.Setenv("STRING_VALUE", "STRING_VALUE1")
-	os.Setenv("STRING_VALUE2", "STRING_VALUE2")
+	require.NoError(t, os.Setenv("STRING_VALUE", "STRING_VALUE1"))
+	require.NoError(t, os.Setenv("STRING_VALUE2", "STRING_VALUE2"))
 	defer func() {
 		for _, v := range []string{"STRING_VALUE", "STRING_VALUE2"} {
 			if err := os.Unsetenv(v); err != nil {
@@ -270,6 +271,9 @@ func TestEnv_SupportedTypes(t *testing.T) {
 		DurationValue time.Duration `env:"DURATION_VALUE"`
 		TimeValue     time.Time     `env:"TIME_VALUE"`
 		TimePtrValue  *time.Time    `env:"TIME_PTR_VALUE"`
+
+		StringArray [3]string `env:"STRING_ARRAY"`
+		IntArray    [5]int    `env:"INT_ARRAY"`
 	}
 
 	tests := []struct {
@@ -451,13 +455,36 @@ func TestEnv_SupportedTypes(t *testing.T) {
 				return &Config{TimePtrValue: &timeValue}
 			},
 		},
+		// arrays
+		{
+			name:   "string array comma separated",
+			envVar: "STRING_ARRAY",
+			envVal: "a,b,c",
+			want:   func() *Config { return &Config{StringArray: [3]string{"a", "b", "c"}} },
+		},
+		{
+			name:   "string array semicolon separated",
+			envVar: "STRING_ARRAY",
+			envVal: "a;b;c",
+			want:   func() *Config { return &Config{StringArray: [3]string{"a", "b", "c"}} },
+		},
+		{
+			name:   "int array comma separated",
+			envVar: "INT_ARRAY",
+			envVal: "1,2,3,4,5",
+			want:   func() *Config { return &Config{IntArray: [5]int{1, 2, 3, 4, 5}} },
+		},
+		{
+			name:   "int array semicolon separated",
+			envVar: "INT_ARRAY",
+			envVal: "1;2;3;4;5",
+			want:   func() *Config { return &Config{IntArray: [5]int{1, 2, 3, 4, 5}} },
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.NoError(t, os.Setenv(tt.envVar, tt.envVal))
-			defer os.Unsetenv(tt.envVar)
-
+			t.Setenv(tt.envVar, tt.envVal)
 			cfgData := &Config{}
 			cfg := NewConfig(config.Struct(cfgData))
 
@@ -505,8 +532,7 @@ func TestEnv_TimeType_Override(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.NoError(t, os.Setenv(tt.envVar, tt.envVal))
-			defer os.Unsetenv(tt.envVar)
+			t.Setenv(tt.envVar, tt.envVal)
 
 			cfg := NewConfig(config.Struct(tt.cfg))
 			require.NoError(t, cfg.Init())
@@ -561,8 +587,7 @@ func TestEnv_TimePointerType_Override(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.NoError(t, os.Setenv(tt.envVar, tt.envVal))
-			defer os.Unsetenv(tt.envVar)
+			t.Setenv(tt.envVar, tt.envVal)
 
 			cfgData := tt.cfg()
 			cfg := NewConfig(config.Struct(cfgData))
@@ -570,5 +595,129 @@ func TestEnv_TimePointerType_Override(t *testing.T) {
 			require.NoError(t, cfg.Load(context.Background(), config.LoadOverride(true)))
 			require.Equal(t, tt.want(), cfgData)
 		})
+	}
+}
+
+func TestEnv_InvalidValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVar   string
+		envVal   string
+		makeCfg  func() any
+	}{
+		{
+			name:   "bad map",
+			envVar: "BAD_MAP",
+			envVal: "novalue",
+			makeCfg: func() any {
+				return &struct {
+					MapVal map[string]string `env:"BAD_MAP"`
+				}{}
+			},
+		},
+		{
+			name:   "bad array",
+			envVar: "BAD_ARRAY",
+			envVal: "1",
+			makeCfg: func() any {
+				return &struct {
+					ArrayVal [2]int `env:"BAD_ARRAY"`
+				}{}
+			},
+		},
+		{
+			name:   "bad duration",
+			envVar: "BAD_DURATION",
+			envVal: "oops",
+			makeCfg: func() any {
+				return &struct {
+					Duration time.Duration `env:"BAD_DURATION"`
+				}{}
+			},
+		},
+		{
+			name:   "bad time",
+			envVar: "BAD_TIME",
+			envVal: "not-a-time",
+			makeCfg: func() any {
+				return &struct {
+					TimeVal time.Time `env:"BAD_TIME"`
+				}{}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.envVar, tt.envVal)
+
+			cfgData := tt.makeCfg()
+			c := NewConfig(config.Struct(cfgData))
+			require.NoError(t, c.Init())
+			err := c.Load(context.Background())
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestEnv_AllTypes(t *testing.T) {
+	type Config struct {
+		BoolVal    bool              `env:"BOOL"`
+		StringVal  string            `env:"STRING"`
+		IntVal     int               `env:"INT"`
+		UintVal    uint              `env:"UINT"`
+		Float32Val float32           `env:"FLOAT32"`
+		Float64Val float64           `env:"FLOAT64"`
+		SliceVal   []string          `env:"SLICE"`
+		ArrayVal   [2]int            `env:"ARRAY"`
+		MapVal     map[string]string `env:"MAP"`
+		Duration   time.Duration     `env:"DURATION"`
+		TimeVal    time.Time         `env:"TIME"`
+		TimePtrVal *time.Time        `env:"TIME_PTR"`
+	}
+
+	now := time.Now().Truncate(time.Second)
+	vars := map[string]string{
+		"BOOL":     "true",
+		"STRING":   "hello",
+		"INT":      "42",
+		"UINT":     "7",
+		"FLOAT32":  "3.14",
+		"FLOAT64":  "2.71828",
+		"SLICE":    "a,b,c",
+		"ARRAY":    "1;2",
+		"MAP":      "k1=v1,k2=v2",
+		"DURATION": "5s",
+		"TIME":     now.Format(time.RFC3339),
+		"TIME_PTR": now.Format(time.RFC3339),
+	}
+	for k, v := range vars {
+		t.Setenv(k, v)
+	}
+
+	cfg := &Config{}
+	c := NewConfig(config.Struct(cfg))
+	require.NoError(t, c.Load(context.Background()))
+
+	require.True(t, cfg.BoolVal)
+	require.Equal(t, "hello", cfg.StringVal)
+	require.Equal(t, 42, cfg.IntVal)
+	require.Equal(t, uint(7), cfg.UintVal)
+	require.InEpsilon(t, 3.14, cfg.Float32Val, 1e-6)
+	require.InEpsilon(t, 2.71828, cfg.Float64Val, 1e-6)
+	require.Equal(t, []string{"a", "b", "c"}, cfg.SliceVal)
+	require.Equal(t, [2]int{1, 2}, cfg.ArrayVal)
+	require.Equal(t, map[string]string{"k1": "v1", "k2": "v2"}, cfg.MapVal)
+	require.Equal(t, 5*time.Second, cfg.Duration)
+	require.Equal(t, now, cfg.TimeVal)
+	require.NotNil(t, cfg.TimePtrVal)
+	require.Equal(t, now, *cfg.TimePtrVal)
+
+	// Roundtrip Save to Load
+	require.NoError(t, c.Save(context.Background()))
+	for k := range vars {
+		val, ok := os.LookupEnv(k)
+		require.True(t, ok, "env var %s must exist", k)
+		require.NotEmpty(t, val)
 	}
 }

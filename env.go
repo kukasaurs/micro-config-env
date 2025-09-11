@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"dario.cat/mergo"
+
 	"go.unistack.org/micro/v3/config"
 	rutil "go.unistack.org/micro/v3/util/reflect"
 )
@@ -51,7 +52,7 @@ func (c *envConfig) Load(ctx context.Context, opts ...config.LoadOption) error {
 
 	options := config.NewLoadOptions(opts...)
 	mopts := []func(*mergo.Config){mergo.WithTypeCheck}
-	tt := timeTransformer{override: options.Override}
+	tt := typeTransformer{override: options.Override}
 	mopts = append(mopts, mergo.WithTransformers(tt))
 	if options.Override {
 		mopts = append(mopts, mergo.WithOverride)
@@ -94,9 +95,12 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		kt := t.Key()
 		et := t.Elem()
 		for _, nval := range nvals {
-			kv := strings.FieldsFunc(nval, func(c rune) bool { return c == '=' })
-			mkey := reflect.Indirect(reflect.New(kt))
-			mval := reflect.Indirect(reflect.New(et))
+			kv := strings.SplitN(nval, "=", 2)
+			if len(kv) != 2 {
+				return fmt.Errorf("invalid map entry %q", nval)
+			}
+			mkey := reflect.New(kt).Elem()
+			mval := reflect.New(et).Elem()
 			if err := fillValue(ctx, mkey, kv[0]); err != nil {
 				return err
 			}
@@ -105,11 +109,25 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 			}
 			value.SetMapIndex(mkey, mval)
 		}
-	case reflect.Slice, reflect.Array:
+	case reflect.Slice:
+		t := value.Type()
 		nvals := strings.FieldsFunc(val, func(c rune) bool { return c == ',' || c == ';' })
-		value.Set(reflect.MakeSlice(reflect.SliceOf(value.Type().Elem()), len(nvals), len(nvals)))
+		value.Set(reflect.MakeSlice(t, len(nvals), len(nvals)))
 		for idx, nval := range nvals {
-			nvalue := reflect.Indirect(reflect.New(value.Type().Elem()))
+			nvalue := reflect.New(t.Elem()).Elem()
+			if err := fillValue(ctx, nvalue, nval); err != nil {
+				return err
+			}
+			value.Index(idx).Set(nvalue)
+		}
+	case reflect.Array:
+		t := value.Type()
+		nvals := strings.FieldsFunc(val, func(c rune) bool { return c == ',' || c == ';' })
+		if len(nvals) != t.Len() {
+			return fmt.Errorf("array length mismatch: got %d, want %d", len(nvals), t.Len())
+		}
+		for idx, nval := range nvals {
+			nvalue := reflect.New(t.Elem()).Elem()
 			if err := fillValue(ctx, nvalue, nval); err != nil {
 				return err
 			}
@@ -120,47 +138,23 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(v))
+		value.SetBool(v)
 	case reflect.String:
-		value.Set(reflect.ValueOf(val))
+		value.SetString(val)
 	case reflect.Float32:
 		v, err := strconv.ParseFloat(val, 32)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(float32(v)))
+		value.SetFloat(v)
 	case reflect.Float64:
 		v, err := strconv.ParseFloat(val, 64)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(float64(v)))
-	case reflect.Int:
-		v, err := strconv.ParseInt(val, 10, 0)
-		if err != nil {
-			return err
-		}
-		value.Set(reflect.ValueOf(int(v)))
-	case reflect.Int8:
-		v, err := strconv.ParseInt(val, 10, 8)
-		if err != nil {
-			return err
-		}
-		value.Set(reflect.ValueOf(int8(v)))
-	case reflect.Int16:
-		v, err := strconv.ParseInt(val, 10, 16)
-		if err != nil {
-			return err
-		}
-		value.Set(reflect.ValueOf(int16(v)))
-	case reflect.Int32:
-		v, err := strconv.ParseInt(val, 10, 32)
-		if err != nil {
-			return err
-		}
-		value.Set(reflect.ValueOf(int32(v)))
-	case reflect.Int64:
-		if value.Type() == reflect.TypeOf(time.Duration(0)) {
+		value.SetFloat(v)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if isDurationType(value.Type()) {
 			d, err := time.ParseDuration(val)
 			if err != nil {
 				return fmt.Errorf("cannot parse duration %q: %w", val, err)
@@ -168,41 +162,19 @@ func fillValue(ctx context.Context, value reflect.Value, val string) error {
 			value.SetInt(int64(d))
 			return nil
 		}
-		v, err := strconv.ParseInt(val, 10, 64)
+		bitSize := value.Type().Bits()
+		v, err := strconv.ParseInt(val, 10, bitSize)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(int64(v)))
-	case reflect.Uint:
-		v, err := strconv.ParseUint(val, 10, 0)
+		value.SetInt(v)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		bitSize := value.Type().Bits()
+		v, err := strconv.ParseUint(val, 10, bitSize)
 		if err != nil {
 			return err
 		}
-		value.Set(reflect.ValueOf(uint(v)))
-	case reflect.Uint8:
-		v, err := strconv.ParseUint(val, 10, 8)
-		if err != nil {
-			return err
-		}
-		value.Set(reflect.ValueOf(uint8(v)))
-	case reflect.Uint16:
-		v, err := strconv.ParseUint(val, 10, 16)
-		if err != nil {
-			return err
-		}
-		value.Set(reflect.ValueOf(uint16(v)))
-	case reflect.Uint32:
-		v, err := strconv.ParseUint(val, 10, 32)
-		if err != nil {
-			return err
-		}
-		value.Set(reflect.ValueOf(uint32(v)))
-	case reflect.Uint64:
-		v, err := strconv.ParseUint(val, 10, 64)
-		if err != nil {
-			return err
-		}
-		value.Set(reflect.ValueOf(uint64(v)))
+		value.SetUint(v)
 	}
 	return nil
 }
@@ -249,8 +221,25 @@ func (c *envConfig) setValues(ctx context.Context, valueOf reflect.Value) error 
 		if !ok {
 			continue
 		}
+		var strVal string
+		switch value.Kind() {
+		case reflect.Slice, reflect.Array:
+			parts := make([]string, value.Len())
+			for i := 0; i < value.Len(); i++ {
+				parts[i] = fmt.Sprintf("%v", value.Index(i).Interface())
+			}
+			strVal = strings.Join(parts, ",")
+		case reflect.Map:
+			parts := make([]string, 0, value.Len())
+			for _, key := range value.MapKeys() {
+				parts = append(parts, fmt.Sprintf("%v=%v", key.Interface(), value.MapIndex(key).Interface()))
+			}
+			strVal = strings.Join(parts, ",")
+		default:
+			strVal = fmt.Sprintf("%v", value.Interface())
+		}
 		for _, tag := range strings.Split(tags, ",") {
-			if err := os.Setenv(tag, fmt.Sprintf("%v", value.Interface())); err != nil && !c.opts.AllowFail {
+			if err := os.Setenv(tag, strVal); err != nil && !c.opts.AllowFail {
 				return err
 			}
 		}
@@ -300,7 +289,7 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 
 		switch value.Kind() {
 		case reflect.Struct:
-			if value.Type() == reflect.TypeOf(time.Time{}) {
+			if isTimeType(value.Type()) {
 				if eval, ok := getEnvValue(field, structTag); ok {
 					parsed, err := time.Parse(time.RFC3339, eval)
 					if err != nil {
@@ -310,13 +299,12 @@ func fillValues(ctx context.Context, valueOf reflect.Value, structTag string) er
 				}
 				continue
 			}
-			value.Set(reflect.Indirect(reflect.New(value.Type())))
 			if err := fillValues(ctx, value, structTag); err != nil {
 				return err
 			}
 			continue
 		case reflect.Ptr:
-			if value.Type().Elem() == reflect.TypeOf(time.Time{}) {
+			if isTimeType(value.Type().Elem()) {
 				if eval, ok := getEnvValue(field, structTag); ok {
 					parsed, err := time.Parse(time.RFC3339, eval)
 					if err != nil {
@@ -406,12 +394,12 @@ func NewConfig(opts ...config.Option) config.Config {
 	return &envConfig{opts: options}
 }
 
-type timeTransformer struct {
+type typeTransformer struct {
 	override bool
 }
 
-func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
-	if typ == reflect.TypeOf(time.Time{}) {
+func (t typeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Value) error {
+	if isTimeType(typ) {
 		return func(dst, src reflect.Value) error {
 			if !dst.CanSet() || src.IsZero() {
 				return nil
@@ -423,7 +411,7 @@ func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Val
 			return nil
 		}
 	}
-	if typ == reflect.TypeOf((*time.Time)(nil)) {
+	if isTimePtrType(typ) {
 		return func(dst, src reflect.Value) error {
 			if !dst.CanSet() || src.IsNil() {
 				return nil
@@ -438,5 +426,18 @@ func (t timeTransformer) Transformer(typ reflect.Type) func(dst, src reflect.Val
 			return nil
 		}
 	}
+	if typ.Kind() == reflect.Array {
+		return func(dst, src reflect.Value) error {
+			if !dst.CanSet() || src.IsZero() {
+				return nil
+			}
+			if !t.override && !isZeroArray(dst) {
+				return nil
+			}
+			dst.Set(src)
+			return nil
+		}
+	}
+
 	return nil
 }
